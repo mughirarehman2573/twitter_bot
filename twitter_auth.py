@@ -1,4 +1,4 @@
-import asyncio
+from aiohttp.abc import HTTPException
 from twscrape import AccountsPool, API
 import logging
 from pymongo import MongoClient
@@ -33,15 +33,6 @@ class TwitterAuth:
         )
         logger.info(f"Added account: {username}")
 
-    async def add_accounts_from_file(self, filename="accounts.txt"):
-        """Load accounts from file and add them"""
-        with open(filename) as f:
-            for line in f:
-                if line.strip():
-                    parts = line.strip().split(":")
-                    if len(parts) >= 4:
-                        await self.add_account(*parts[:4])
-
     async def get_active_accounts(self):
         """Get list of active accounts from MongoDB"""
         return list(self.db.twitter_accounts.find({"is_active": True}))
@@ -60,7 +51,3 @@ class TwitterAuth:
         return API(self.pool)
 
 
-if __name__ == "__main__":
-    auth = TwitterAuth()
-    # Add accounts from file
-    asyncio.run(auth.add_accounts_from_file())

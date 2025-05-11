@@ -28,29 +28,41 @@ class TwitterHashtagMonitor:
         return list(self.db.campaigns.find({"active": True}))
 
     async def search_hashtag_pairs(self, hashtag_pairs: List[Tuple[str, str]]) -> List[dict]:
-        """Search Twitter for posts containing hashtag pairs"""
+        """Search Twitter for posts containing hashtag pairs with account retry"""
         all_tweets = []
 
         for pair in hashtag_pairs:
             query = " ".join(pair) + " lang:en"
-            try:
-                tweets = []
-                async for tweet in self.api.search(query, limit=100):
-                    tweets.append({
-                        "username": tweet.user.username,
-                        "hashtags": [hashtag.text for hashtag in tweet.entities.hashtags],
-                        "caption": tweet.text,
-                        "timestamp": tweet.created_at,
-                        "likes": tweet.favorite_count,
-                        "comments": tweet.reply_count,
-                        "retweets": tweet.retweet_count,
-                        "url": f"https://twitter.com/{tweet.user.username}/status/{tweet.id}"
-                    })
-                all_tweets.extend(tweets)
-                logger.info(f"Found {len(tweets)} tweets for {pair}")
-            except Exception as e:
-                logger.error(f"Error searching for {pair}: {str(e)}")
-                await asyncio.sleep(60)
+            retries = 3
+
+            for attempt in range(retries):
+                try:
+                    tweets = []
+                    async for tweet in self.api.search(query, limit=100):
+                        tweets.append({
+                            "username": tweet.user.username,
+                            "hashtags": [hashtag.get("text", "") for hashtag in
+                                         getattr(tweet, "entities", {}).get("hashtags", [])],
+                            "caption": tweet.text,
+                            "timestamp": tweet.created_at,
+                            "likes": tweet.favorite_count,
+                            "comments": tweet.reply_count,
+                            "retweets": tweet.retweet_count,
+                            "url": f"https://twitter.com/{tweet.user.username}/status/{tweet.id}"
+                        })
+                    all_tweets.extend(tweets)
+                    logger.info(f"Found {len(tweets)} tweets for {pair}")
+                    break  # Success, no need to retry
+                except Exception as e:
+                    if "No account available for queue" in str(e):
+                        logger.warning("Rate limit hit, trying with a new account...")
+                        await asyncio.sleep(5)
+                        self.api = await self.auth.get_api()
+                        continue
+                    else:
+                        logger.error(f"Error searching for {pair}: {str(e)}")
+                        await asyncio.sleep(10)
+                        break
 
         return all_tweets
 
@@ -207,7 +219,7 @@ class TwitterHashtagMonitor:
                     except Exception as e:
                         logger.error(f"Error monitoring campaign {campaign['name']}: {str(e)}")
                 processing_time = time.time() - start_time
-                sleep_time = max(0, self.poll_interval - processing_time)
+                sleep_time = max(0, int(self.poll_interval - processing_time))
                 await asyncio.sleep(sleep_time)
 
             except Exception as e:
