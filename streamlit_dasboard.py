@@ -1,3 +1,6 @@
+import os
+import signal
+
 import streamlit as st
 from pymongo import MongoClient
 import pandas as pd
@@ -6,15 +9,14 @@ from datetime import datetime, timedelta
 import asyncio
 from twitter_auth import TwitterAuth
 import subprocess
-import schedule
-import threading
-import time
 
 st.set_page_config(page_title="Twitter Hashtag Monitor", layout="wide")
+
 
 @st.cache_resource
 def get_db():
     return MongoClient("mongodb://localhost:27017").twitter_monitor
+
 
 db = get_db()
 
@@ -46,6 +48,16 @@ if selected_page == "Account Management":
                     try:
                         auth = TwitterAuth()
                         auth.add_account(username, password, email, email_password)
+                        db.twitter_accounts.insert_one({
+                            "username": username,
+                            "password": password,
+                            "email": email,
+                            "email_password": email_password,
+                            "is_active": True,
+                            "added_at": datetime.utcnow(),
+                            "last_used": None,
+                            "proxy": None
+                        })
                         st.success("Account added successfully!")
                     except Exception as e:
                         st.error(f"Error adding account: {str(e)}")
@@ -66,8 +78,10 @@ if selected_page == "Account Management":
                 col1, col2 = st.columns([3, 1])
                 with col1:
                     st.write(f"**Added:** {account['added_at'].strftime('%Y-%m-%d %H:%M')}")
-                    if 'last_used' in account:
+                    if 'last_used' in account and account['last_used']:
                         st.write(f"**Last used:** {account['last_used'].strftime('%Y-%m-%d %H:%M')}")
+                    else:
+                        st.write("**Last used:** Never")
                     if 'email' in account and account['email']:
                         st.write(f"**Email:** {account['email']}")
                     if 'proxy' in account and account['proxy']:
@@ -84,10 +98,12 @@ if selected_page == "Account Management":
                 for account in inactive_accounts:
                     st.write(f"@{account['username']} (last active: {account.get('last_used', 'never')})")
 
+
+
 elif selected_page == "Campaign Management":
     st.header("Campaign Management")
 
-    with st.expander("Create New Campaign"):
+    with st.expander("Create New Campaign", expanded=True):
         with st.form("new_campaign"):
             name = st.text_input("Campaign Name")
             hashtag_pairs = st.text_area("Hashtag Pairs (one pair per line, separate hashtags with comma)")
@@ -106,6 +122,7 @@ elif selected_page == "Campaign Management":
                         "active": True
                     })
                     st.success("Campaign created successfully!")
+                    st.rerun()
                 else:
                     st.error("Campaign name and at least one hashtag pair are required")
 
@@ -116,45 +133,122 @@ elif selected_page == "Campaign Management":
         st.info("No active campaigns found")
     else:
         for campaign in campaigns:
-            with st.expander(f"{campaign['name']} (ID: {campaign['_id']})"):
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    st.write(f"**Hashtag Pairs:** {', '.join(['+'.join(pair) for pair in campaign['hashtag_pairs']])}")
-                    st.write(f"**Accounts Tracked:** {len(campaign['accounts_to_track'])}")
-                    st.write(f"**Created:** {campaign['created_at'].strftime('%Y-%m-%d %H:%M')}")
+            is_editing = 'editing_campaign' in st.session_state and st.session_state.editing_campaign == campaign['_id']
 
-                with col2:
-                    if st.button("Deactivate", key=f"deactivate_{campaign['_id']}"):
-                        db.campaigns.update_one({"_id": campaign["_id"]}, {"$set": {"active": False, "updated_at": datetime.utcnow()}})
+            with st.expander(f"{campaign['name']} (Created: {campaign['created_at'].strftime('%Y-%m-%d')})",
+                             expanded=is_editing):
+                if not is_editing:
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        st.write(f"**Hashtag Pairs:**")
+                        for pair in campaign['hashtag_pairs']:
+                            st.write(f"- {pair[0].strip()} + {pair[1].strip()}")
 
-                    if st.button("Delete", key=f"delete_{campaign['_id']}"):
-                        db.campaigns.delete_one({"_id": campaign["_id"]})
+                        st.write(f"**Accounts Tracked:** {len(campaign['accounts_to_track'])}")
+                        if campaign['accounts_to_track']:
+                            st.write("**Tracked Accounts:**")
+                            for acc in campaign['accounts_to_track']:
+                                st.write(f"- {acc}")
 
-elif selected_page == "Run Script":
-    st.header("Manual or Scheduled Script Execution")
+                        st.write(f"**Created:** {campaign['created_at'].strftime('%Y-%m-%d %H:%M')}")
+                        st.write(f"**Last Updated:** {campaign['updated_at'].strftime('%Y-%m-%d %H:%M')}")
+
+                    with col2:
+                        if st.button("Edit", key=f"edit_{campaign['_id']}"):
+                            st.session_state.editing_campaign = campaign['_id']
+                            st.rerun()
+
+                        if st.button("Deactivate", key=f"deactivate_{campaign['_id']}"):
+                            db.campaigns.update_one(
+                                {"_id": campaign["_id"]},
+                                {"$set": {"active": False, "updated_at": datetime.utcnow()}}
+                            )
+                            st.success("Campaign deactivated!")
+                            st.rerun()
+
+                        if st.button("Delete", key=f"delete_{campaign['_id']}"):
+                            db.campaigns.delete_one({"_id": campaign["_id"]})
+                            st.success("Campaign deleted!")
+                            st.rerun()
+                else:
+                    with st.form(f"edit_form_{campaign['_id']}"):
+                        new_name = st.text_input("Campaign Name", value=campaign['name'])
+
+                        current_pairs = "\n".join([f"{pair[0]},{pair[1]}" for pair in campaign['hashtag_pairs']])
+                        new_hashtag_pairs = st.text_area(
+                            "Hashtag Pairs (one pair per line, separate hashtags with comma)",
+                            value=current_pairs
+                        )
+
+                        current_accounts = "\n".join(campaign['accounts_to_track'])
+                        new_accounts_to_track = st.text_area(
+                            "Accounts to Track (one per line)",
+                            value=current_accounts
+                        )
+
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            if st.form_submit_button("Update Campaign"):
+                                if new_name and new_hashtag_pairs:
+                                    pairs = [line.split(",")[:2] for line in new_hashtag_pairs.splitlines() if
+                                             line.strip()]
+                                    accounts = [acc.strip() for acc in new_accounts_to_track.splitlines() if
+                                                acc.strip()]
+
+                                    db.campaigns.update_one(
+                                        {"_id": campaign["_id"]},
+                                        {"$set": {
+                                            "name": new_name,
+                                            "hashtag_pairs": pairs,
+                                            "accounts_to_track": accounts,
+                                            "updated_at": datetime.utcnow()
+                                        }}
+                                    )
+                                    st.success("Campaign updated successfully!")
+                                    del st.session_state.editing_campaign
+                                    st.rerun()
+                                else:
+                                    st.error("Campaign name and at least one hashtag pair are required")
+
+                        with col2:
+                            if st.form_submit_button("Cancel"):
+                                del st.session_state.editing_campaign
+                                st.rerun()
+
+
+if 'script_process' not in st.session_state:
+    st.session_state.script_process = None
+
+if selected_page == "Run Script":
+    st.header("Script Execution")
+
 
     def run_my_script():
-        st.success("Script executed!")
-        subprocess.call(["python", "twitter_bot.py"])
+        if st.session_state.script_process is None:
+            process = subprocess.Popen(["python", "twitter_bot.py"])
+            st.session_state.script_process = process
+            st.success("Script started!")
+        else:
+            st.warning("Script is already running.")
 
-    def background_schedule():
-        while True:
-            schedule.run_pending()
-            time.sleep(1)
 
-    if st.button("Run Script Now"):
-        run_my_script()
+    def stop_my_script():
+        process = st.session_state.script_process
+        if process and process.poll() is None:
+            os.kill(process.pid, signal.SIGTERM)
+            st.session_state.script_process = None
+            st.success("Script stopped!")
+        else:
+            st.warning("No script is running.")
 
-    st.write("### Schedule Script")
-    schedule_time = st.text_input("Enter time in HH:MM (24-hour format)", "15:30")
 
-    if st.button("Set Schedule"):
-        try:
-            schedule.every().day.at(schedule_time).do(run_my_script)
-            threading.Thread(target=background_schedule, daemon=True).start()
-            st.success(f"Script scheduled daily at {schedule_time}")
-        except Exception as e:
-            st.error(f"Failed to schedule: {e}")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Run Script Now"):
+            run_my_script()
+    with col2:
+        if st.button("Cancel Script"):
+            stop_my_script()
 
 
 elif selected_page == "Surge Visualization":
