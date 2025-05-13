@@ -140,37 +140,37 @@ if selected_page == "Account Management":
                             st.success(f"Account @{account['username']} deleted permanently!")
                             st.rerun()
 
-        if st.checkbox("Show inactive accounts"):
-            inactive_accounts = list(db.twitter_accounts.find({"is_active": False}))
-            if inactive_accounts:
-                st.subheader("Inactive Accounts")
-                for account in inactive_accounts:
-                    with st.expander(f"@{account['username']}"):
-                        col1, col2 = st.columns([3, 1])
-                        with col1:
-                            st.write(f"**Added:** {account['added_at'].strftime('%Y-%m-%d %H:%M')}")
-                            if 'last_used' in account and account['last_used']:
-                                st.write(f"**Last used:** {account['last_used'].strftime('%Y-%m-%d %H:%M')}")
-                            else:
-                                st.write("**Last used:** Never")
-                            if 'email' in account and account['email']:
-                                st.write(f"**Email:** {account['email']}")
-                            if 'proxy' in account and account['proxy']:
-                                st.write(f"**Proxy:** {account['proxy']}")
-                        with col2:
-                            btn_col1, btn_col2 = st.columns(2)
-                            with btn_col1:
-                                if st.button("Enable", key=f"enable_{account['username']}"):
-                                    db.twitter_accounts.update_one(
-                                        {"username": account['username']},
-                                        {"$set": {"is_active": True}}
-                                    )
-                                    st.rerun()
-                            with btn_col2:
-                                if st.button("Delete", key=f"delete_inactive_{account['username']}"):
-                                    db.twitter_accounts.delete_one({"username": account['username']})
-                                    st.success(f"Account @{account['username']} deleted permanently!")
-                                    st.rerun()
+    if st.checkbox("Show inactive accounts"):
+        inactive_accounts = list(db.twitter_accounts.find({"is_active": False}))
+        if inactive_accounts:
+            st.subheader("Inactive Accounts")
+            for account in inactive_accounts:
+                with st.expander(f"@{account['username']}"):
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        st.write(f"**Added:** {account['added_at'].strftime('%Y-%m-%d %H:%M')}")
+                        if 'last_used' in account and account['last_used']:
+                            st.write(f"**Last used:** {account['last_used'].strftime('%Y-%m-%d %H:%M')}")
+                        else:
+                            st.write("**Last used:** Never")
+                        if 'email' in account and account['email']:
+                            st.write(f"**Email:** {account['email']}")
+                        if 'proxy' in account and account['proxy']:
+                            st.write(f"**Proxy:** {account['proxy']}")
+                    with col2:
+                        btn_col1, btn_col2 = st.columns(2)
+                        with btn_col1:
+                            if st.button("Enable", key=f"enable_{account['username']}"):
+                                db.twitter_accounts.update_one(
+                                    {"username": account['username']},
+                                    {"$set": {"is_active": True}}
+                                )
+                                st.rerun()
+                        with btn_col2:
+                            if st.button("Delete", key=f"delete_inactive_{account['username']}"):
+                                db.twitter_accounts.delete_one({"username": account['username']})
+                                st.success(f"Account @{account['username']} deleted permanently!")
+                                st.rerun()
 
 
 elif selected_page == "Campaign Management":
