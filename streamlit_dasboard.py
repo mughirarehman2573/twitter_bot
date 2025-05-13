@@ -1,6 +1,7 @@
 import hashlib
 import os
 import signal
+import sys
 
 import streamlit as st
 from pymongo import MongoClient
@@ -264,7 +265,7 @@ if selected_page == "Run Script":
 
     def run_my_script():
         if st.session_state.script_process is None:
-            process = subprocess.Popen(["python", "twitter_bot.py"])
+            process = subprocess.Popen([sys.executable, os.path.join(os.getcwd(), "twitter_bot.py")])
             st.session_state.script_process = process
             st.success("Script started!")
         else:
