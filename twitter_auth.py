@@ -23,13 +23,13 @@ class TwitterAuth:
         self.login_retry_delay = 5
         self.failed_accounts = set()
 
-    def _setup_selenium(self, headless=True):
+    def _setup_selenium(self, headless=None):
         options = uc.ChromeOptions()
         if headless:
             options.add_argument("--headless=new")
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
-        driver = uc.Chrome(version_main=136, options=options, headless=headless)
+        driver = uc.Chrome(options=options, headless=headless)
         return driver
 
     async def _get_cookies_via_selenium(self, username: str, password: str, attempt: int = 1):
