@@ -129,7 +129,15 @@ class TwitterAuth:
         )
         logger.warning(f"Disabled account: {username}")
 
+    async def reactivate_all_accounts(self):
+        result = self.db.twitter_accounts.update_many(
+            {"is_active": False},
+            {"$set": {"is_active": True, "reactivated_at": datetime.utcnow()}}
+        )
+        logger.info(f"Reactivated {result.modified_count} previously disabled accounts.")
+
     async def initialize_accounts(self):
+        await self.reactivate_all_accounts()
         active_accounts = await self.get_active_accounts()
         for acc in active_accounts:
             try:
