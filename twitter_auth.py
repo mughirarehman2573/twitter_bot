@@ -166,6 +166,12 @@ class TwitterAuth:
 
     async def get_api(self, exclude_accounts=None, preferred_accounts=None):
         active_accounts = await self.get_active_accounts()
+        if not active_accounts:
+            logger.warning("⚠️ No active accounts. Attempting to reactivate...")
+
+            await self.reactivate_all_accounts()
+            await self.initialize_accounts()
+            await asyncio.sleep(10)
 
         if exclude_accounts:
             active_accounts = [acc for acc in active_accounts if acc["username"] not in exclude_accounts]
