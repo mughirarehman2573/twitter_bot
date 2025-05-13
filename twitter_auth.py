@@ -29,7 +29,7 @@ class TwitterAuth:
             options.add_argument("--headless=new")
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
-        driver = uc.Chrome(version_main=135, options=options, headless=headless)
+        driver = uc.Chrome(version_main=136, options=options, headless=headless)
         return driver
 
     async def _get_cookies_via_selenium(self, username: str, password: str, email: str, attempt: int = 1):
