@@ -1,3 +1,6 @@
+import random
+
+import asyncio
 import undetected_chromedriver as uc
 from twscrape import AccountsPool, API
 import logging
@@ -16,6 +19,9 @@ class TwitterAuth:
         self.pool = AccountsPool()
         self.db = MongoClient(mongo_uri).twitter_monitor
         self.selenium_timeout = 30
+        self.max_login_attempts = 3
+        self.login_retry_delay = 5
+        self.failed_accounts = set()
 
     def _setup_selenium(self, headless=True):
         options = uc.ChromeOptions()
@@ -26,7 +32,7 @@ class TwitterAuth:
         driver = uc.Chrome(version_main=135, options=options, headless=headless)
         return driver
 
-    async def _get_cookies_via_selenium(self, username: str, password: str):
+    async def _get_cookies_via_selenium(self, username: str, password: str, attempt: int = 1):
         driver = None
         try:
             driver = self._setup_selenium(headless=True)
@@ -67,9 +73,18 @@ class TwitterAuth:
             cookies_str = f"auth_token={auth_token}; ct0={ct0}"
             return cookies_str
 
+
         except Exception as e:
-            logger.error(f"Selenium login failed for {username}: {str(e)}")
-            raise
+            if attempt < self.max_login_attempts:
+                retry_delay = self.login_retry_delay * attempt + random.uniform(0, 2)
+                logger.warning(
+                    f"Login attempt {attempt} failed for {username}. Retrying in {retry_delay:.1f} seconds...")
+                await asyncio.sleep(retry_delay)
+                return await self._get_cookies_via_selenium(username, password, attempt + 1)
+            else:
+                logger.error(f"Max login attempts ({self.max_login_attempts}) reached for {username}")
+                self.failed_accounts.add(username)
+                raise
         finally:
             if driver:
                 driver.quit()

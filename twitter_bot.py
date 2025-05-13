@@ -20,6 +20,7 @@ class TwitterHashtagMonitor:
         self.last_account_check = datetime.utcnow()
         self.failed_accounts = set()
         self.used_accounts = set()
+        self.account_retry_interval = timedelta(hours=1)
 
     async def initialize_api(self):
         """Initialize the Twitter API with accounts from MongoDB"""
@@ -201,21 +202,38 @@ class TwitterHashtagMonitor:
             await self.detect_activity_surges(campaign_id)
 
     async def retry_failed_accounts(self):
-        if self.failed_accounts:
-            logger.info("Retrying previously failed accounts...")
-            self.used_accounts = set()
-            self.api = await self.auth.get_api(preferred_accounts=self.failed_accounts)
-            self.failed_accounts.clear()
+        """Retry accounts that failed previously after cooldown period"""
+        if not self.failed_accounts:
+            return
+
+        now = datetime.utcnow()
+        retry_accounts = []
+
+        for username in list(self.failed_accounts):
+            account = self.db.twitter_accounts.find_one({"username": username})
+            if account and account.get("last_failed"):
+                if now - account["last_failed"] > self.account_retry_interval:
+                    retry_accounts.append(username)
+                    self.failed_accounts.remove(username)
+
+        if retry_accounts:
+            logger.info(f"Retrying {len(retry_accounts)} previously failed accounts")
+            try:
+                self.api = await self.auth.get_api(preferred_accounts=retry_accounts)
+                logger.info("Successfully re-authenticated with previously failed accounts")
+            except Exception as e:
+                logger.error(f"Failed to retry accounts: {str(e)}")
 
     async def run(self):
         logger.info("Starting Twitter hashtag monitoring system")
-        await self.initialize_api()
-
         while True:
             try:
+                await self.initialize_api()
                 await self.check_for_new_accounts()
+
                 start_time = time.time()
                 campaigns = await self.get_active_campaigns()
+
                 for campaign in campaigns:
                     try:
                         await self.monitor_campaign(campaign)
@@ -231,4 +249,9 @@ class TwitterHashtagMonitor:
             except Exception as e:
                 logger.error(f"Error in main loop: {str(e)}")
                 await asyncio.sleep(60)
-                await self.initialize_api()
+                await self.retry_failed_accounts()
+
+
+if __name__ == "__main__":
+    monitor = TwitterHashtagMonitor()
+    asyncio.run(monitor.run())

@@ -1,3 +1,4 @@
+import hashlib
 import os
 import signal
 
@@ -12,6 +13,44 @@ import subprocess
 
 st.set_page_config(page_title="Twitter Hashtag Monitor", layout="wide")
 
+ADMIN_KEY = os.environ.get("ADMIN_KEY", "default_admin_key")
+SESSION_KEY = "authenticated"
+SESSION_KEY_VALUE = hashlib.sha256(ADMIN_KEY.encode()).hexdigest()
+
+def check_password():
+    """Returns `True` if the user had the correct password."""
+    def password_entered():
+        """Checks whether a password entered by the user is correct."""
+        entered_key = st.session_state["password"]
+        hashed_entered_key = hashlib.sha256(entered_key.encode()).hexdigest()
+        if hashed_entered_key == SESSION_KEY_VALUE:
+            st.session_state[SESSION_KEY] = True
+            st.session_state["password"] = ""
+        else:
+            st.session_state[SESSION_KEY] = False
+            st.error("Invalid access key")
+
+    if SESSION_KEY not in st.session_state:
+        st.text_input(
+            "Enter Admin Access Key",
+            type="password",
+            on_change=password_entered,
+            key="password"
+        )
+        st.stop()
+    elif not st.session_state[SESSION_KEY]:
+        st.text_input(
+            "Enter Admin Access Key",
+            type="password",
+            on_change=password_entered,
+            key="password"
+        )
+        st.error("Invalid access key")
+        st.stop()
+    return True
+
+if not check_password():
+    st.stop()
 
 @st.cache_resource
 def get_db():
