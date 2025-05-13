@@ -80,8 +80,8 @@ if selected_page == "Account Management":
         with st.form("new_account"):
             username = st.text_input("Username")
             password = st.text_input("Password", type="password")
-            email = st.text_input("Email (optional)")
-            email_password = st.text_input("Email Password (optional)", type="password")
+            email = st.text_input("Email")
+            email_password = password
 
             if st.form_submit_button("Add Account"):
                 if username and password:
@@ -99,7 +99,7 @@ if selected_page == "Account Management":
                             "proxy": None
                         })
                         st.success("Account added successfully!")
-                        st.rerun()  # Refresh the page to show the new account
+                        st.rerun()
                     except Exception as e:
                         st.error(f"Error adding account: {str(e)}")
                 else:
