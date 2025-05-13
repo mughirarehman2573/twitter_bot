@@ -1,6 +1,7 @@
-import random
-
 import asyncio
+import json
+import os
+
 import undetected_chromedriver as uc
 from twscrape import AccountsPool, API
 import logging
@@ -9,6 +10,9 @@ from datetime import datetime
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from logging.handlers import RotatingFileHandler
+from selenium.webdriver.remote.remote_connection import LOGGER as selenium_logger
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -17,88 +21,198 @@ logger = logging.getLogger(__name__)
 class TwitterAuth:
     def __init__(self, mongo_uri="mongodb://localhost:27017"):
         self.pool = AccountsPool()
-        self.db = MongoClient(mongo_uri).twitter_monitor
-        self.selenium_timeout = 30
+        self.db = MongoClient(
+            mongo_uri,
+            serverSelectionTimeoutMS=5000,
+            connectTimeoutMS=10000,
+            socketTimeoutMS=10000,
+            retryWrites=True,
+            retryReads=True
+        ).twitter_monitor
+        self.selenium_timeout = 45
         self.max_login_attempts = 3
-        self.login_retry_delay = 5
+        self.login_retry_delay = 10
         self.failed_accounts = set()
+        self.driver = None
+        self._setup_selenium_logging()
 
-    def _setup_selenium(self, headless=None):
+    def _setup_selenium_logging(self):
+        os.makedirs("logs", exist_ok=True)
+        selenium_logger.setLevel(logging.INFO)
+        handler = RotatingFileHandler(
+            'logs/selenium.log',
+            maxBytes=1024*1024,
+            backupCount=5,
+            encoding='utf-8'
+        )
+        handler.setFormatter(logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        ))
+        selenium_logger.addHandler(handler)
+        uc_logger = logging.getLogger('undetected_chromedriver')
+        uc_logger.setLevel(logging.INFO)
+        uc_logger.addHandler(handler)
+
+    def _setup_selenium(self, headless=True):
         options = uc.ChromeOptions()
         if headless:
             options.add_argument("--headless=new")
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
-        driver = uc.Chrome(options=options, headless=headless)
-        return driver
+        options.add_argument("--disable-gpu")
+        options.add_argument("--window-size=1920,1080")
+        options.add_argument("--disable-extensions")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--disable-browser-side-navigation")
+        options.add_argument("--disable-features=VizDisplayCompositor")
+        options.set_capability("goog:loggingPrefs", {
+            'browser': 'ALL',
+            'performance': 'ALL',
+            'driver': 'ALL'
+        })
+        try:
+            driver = uc.Chrome(
+                options=options,
+                headless=headless,
+                version_main=114
+            )
+            return driver
+        except Exception as e:
+            logger.warning(f"Failed with Chrome 114, trying without version specification: {e}")
+            try:
+                driver = uc.Chrome(options=options, headless=headless)
+                return driver
+            except Exception as e:
+                logger.error(f"Failed to initialize Chrome driver: {e}")
+                raise
+
+    def _save_browser_logs(self, identifier: str):
+        log_dir = "logs/browser"
+        os.makedirs(log_dir, exist_ok=True)
+        try:
+            console_logs = self.driver.get_log('browser')
+            if console_logs:
+                with open(f"{log_dir}/console_{identifier}.log", 'w') as f:
+                    json.dump(console_logs, f, indent=2)
+        except Exception as e:
+            logger.warning(f"Couldn't save console logs: {e}")
+        try:
+            perf_logs = self.driver.get_log('performance')
+            if perf_logs:
+                with open(f"{log_dir}/perf_{identifier}.log", 'w') as f:
+                    json.dump(perf_logs, f, indent=2)
+        except Exception as e:
+            logger.warning(f"Couldn't save performance logs: {e}")
+        try:
+            network_logs = self.driver.execute_script("return window.performance.getEntries();")
+            if network_logs:
+                with open(f"{log_dir}/network_{identifier}.log", 'w') as f:
+                    json.dump(network_logs, f, indent=2)
+        except Exception as e:
+            logger.warning(f"Couldn't save network logs: {e}")
 
     async def _get_cookies_via_selenium(self, username: str, password: str, attempt: int = 1):
-        driver = None
         try:
-            logger.debug(f"Launching Chrome for login: {username} (attempt {attempt})")
-            driver = self._setup_selenium(headless=True)
-            driver.get("https://twitter.com/i/flow/login")
-
-            logger.debug(f"Waiting for username input field")
-            username_field = WebDriverWait(driver, self.selenium_timeout).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "input[autocomplete='username']"))
+            logger.info(f"Attempting login for {username} (attempt {attempt})")
+            self.driver = self._setup_selenium(headless=True)
+            self.driver.set_page_load_timeout(60)
+            try:
+                logger.debug("Loading Twitter login page")
+                self.driver.get("https://twitter.com/i/flow/login")
+            except Exception as e:
+                logger.warning(f"Page load timeout, continuing anyway: {e}")
+            await asyncio.sleep(2)
+            try:
+                logger.debug("Entering username")
+                username_field = WebDriverWait(self.driver, self.selenium_timeout).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "input[autocomplete='username']"))
+                )
+                username_field.clear()
+                username_field.send_keys(username)
+                await asyncio.sleep(1)
+            except Exception as e:
+                logger.warning(f"Username field not found, trying alternative selectors: {e}")
+                username_field = WebDriverWait(self.driver, self.selenium_timeout).until(
+                    EC.presence_of_element_located((By.XPATH, "//input[@name='text']"))
+                )
+                username_field.clear()
+                username_field.send_keys(username)
+                await asyncio.sleep(1)
+            logger.debug("Clicking next button")
+            next_button = WebDriverWait(self.driver, self.selenium_timeout).until(
+                EC.element_to_be_clickable((By.XPATH, "//div[@role='button']//span[text()='Next']"))
             )
-            username_field.send_keys(username)
-
-            logger.debug(f"Clicking Next after entering username")
-            next_buttons = WebDriverWait(driver, self.selenium_timeout).until(
-                EC.presence_of_all_elements_located((By.XPATH, "//button[@role='button']//span[text()='Next']"))
-            )
-            next_buttons[0].click()
-
-            logger.debug(f"Waiting for password input field")
-            password_field = WebDriverWait(driver, self.selenium_timeout).until(
+            next_button.click()
+            await asyncio.sleep(3)
+            try:
+                unusual_activity = WebDriverWait(self.driver, 5).until(
+                    EC.presence_of_element_located((By.XPATH, "//span[contains(text(),'unusual activity')]"))
+                )
+                if unusual_activity:
+                    logger.warning("Unusual activity detected, trying to handle")
+            except:
+                pass
+            logger.debug("Entering password")
+            password_field = WebDriverWait(self.driver, self.selenium_timeout).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, "input[autocomplete='current-password']"))
             )
             password_field.send_keys(password)
-
-            logger.debug(f"Clicking Login button")
-            login_buttons = WebDriverWait(driver, self.selenium_timeout).until(
-                EC.presence_of_all_elements_located((By.CSS_SELECTOR, "button[data-testid='LoginForm_Login_Button']"))
+            await asyncio.sleep(1)
+            logger.debug("Clicking login button")
+            login_button = WebDriverWait(self.driver, self.selenium_timeout).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, "button[data-testid='LoginForm_Login_Button']"))
             )
-            login_buttons[0].click()
-
-            logger.debug(f"Waiting for Home tab to confirm login success")
-            WebDriverWait(driver, self.selenium_timeout).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "[data-testid='AppTabBar_Home_Link']"))
-            )
-
-            logger.debug(f"Login success, extracting cookies")
-            all_cookies = driver.get_cookies()
-            cookie_dict = {cookie['name']: cookie['value'] for cookie in all_cookies}
-
-            logger.debug(f"Extracted cookies: {cookie_dict}")
-            auth_token = cookie_dict.get("auth_token")
-            ct0 = cookie_dict.get("ct0")
-
-            if not auth_token or not ct0:
-                logger.warning(f"auth_token or ct0 not found in cookies for {username}")
-                raise ValueError("auth_token or ct0 not found in cookies")
-
-            cookies_str = f"auth_token={auth_token}; ct0={ct0}"
-            return cookies_str
-
-        except Exception as e:
-            logger.exception(f"Exception during login attempt {attempt} for {username}: {e}")
-            if attempt < self.max_login_attempts:
-                retry_delay = self.login_retry_delay * attempt + random.uniform(0, 2)
-                logger.warning(
-                    f"Login attempt {attempt} failed for {username}. Retrying in {retry_delay:.1f} seconds..."
+            login_button.click()
+            await asyncio.sleep(5)
+            try:
+                WebDriverWait(self.driver, self.selenium_timeout).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "[data-testid='AppTabBar_Home_Link']"))
                 )
+            except:
+                logger.warning("Home link not found, checking for error messages")
+                try:
+                    error_message = self.driver.find_element(By.XPATH, "//span[contains(text(),'incorrect')]")
+                    if error_message:
+                        logger.error(f"Login error: {error_message.text}")
+                        raise ValueError(f"Login failed: {error_message.text}")
+                except:
+                    pass
+            logger.debug("Extracting cookies")
+            cookies = self.driver.get_cookies()
+            cookie_dict = {c['name']: c['value'] for c in cookies}
+            if not cookie_dict.get('auth_token') or not cookie_dict.get('ct0'):
+                raise ValueError("Essential cookies not found")
+            cookies_str = f"auth_token={cookie_dict['auth_token']}; ct0={cookie_dict['ct0']}"
+            logger.info(f"Successfully logged in {username}")
+            self._save_browser_logs(username)
+            return cookies_str
+        except Exception as e:
+            logger.error(f"Login attempt {attempt} failed for {username}: {str(e)}")
+            if self.driver:
+                try:
+                    self.driver.save_screenshot(f"login_error_{username}_attempt_{attempt}.png")
+                    logger.info(f"Screenshot saved for debugging")
+                    self._save_browser_logs(f"error_{username}_attempt_{attempt}")
+                except:
+                    pass
+                self.driver.quit()
+                self.driver = None
+            if attempt < self.max_login_attempts:
+                retry_delay = self.login_retry_delay * attempt
+                logger.warning(f"Retrying in {retry_delay} seconds...")
                 await asyncio.sleep(retry_delay)
                 return await self._get_cookies_via_selenium(username, password, attempt + 1)
             else:
-                logger.error(f"Max login attempts ({self.max_login_attempts}) reached for {username}")
+                logger.error(f"Max login attempts reached for {username}")
                 self.failed_accounts.add(username)
                 raise
         finally:
-            if driver:
-                driver.quit()
+            if self.driver:
+                try:
+                    self.driver.quit()
+                except:
+                    pass
+                self.driver = None
 
     async def add_account(self, username: str, password: str, email: str | None, email_password: str | None):
         try:
