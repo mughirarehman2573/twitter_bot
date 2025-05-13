@@ -65,26 +65,9 @@ class TwitterAuth:
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-browser-side-navigation")
         options.add_argument("--disable-features=VizDisplayCompositor")
-        options.set_capability("goog:loggingPrefs", {
-            'browser': 'ALL',
-            'performance': 'ALL',
-            'driver': 'ALL'
-        })
-        try:
-            driver = uc.Chrome(
-                options=options,
-                headless=headless,
-                version_main=114
-            )
-            return driver
-        except Exception as e:
-            logger.warning(f"Failed with Chrome 114, trying without version specification: {e}")
-            try:
-                driver = uc.Chrome(options=options, headless=headless)
-                return driver
-            except Exception as e:
-                logger.error(f"Failed to initialize Chrome driver: {e}")
-                raise
+
+        driver = uc.Chrome(version_main=136, options=options, headless=headless)
+        return driver
 
     def _save_browser_logs(self, identifier: str):
         log_dir = "logs/browser"
