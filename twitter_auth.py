@@ -35,50 +35,61 @@ class TwitterAuth:
     async def _get_cookies_via_selenium(self, username: str, password: str, attempt: int = 1):
         driver = None
         try:
+            logger.debug(f"Launching Chrome for login: {username} (attempt {attempt})")
             driver = self._setup_selenium(headless=True)
             driver.get("https://twitter.com/i/flow/login")
 
+            logger.debug(f"Waiting for username input field")
             username_field = WebDriverWait(driver, self.selenium_timeout).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, "input[autocomplete='username']"))
             )
             username_field.send_keys(username)
 
+            logger.debug(f"Clicking Next after entering username")
             next_buttons = WebDriverWait(driver, self.selenium_timeout).until(
                 EC.presence_of_all_elements_located((By.XPATH, "//button[@role='button']//span[text()='Next']"))
             )
             next_buttons[0].click()
 
+            logger.debug(f"Waiting for password input field")
             password_field = WebDriverWait(driver, self.selenium_timeout).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, "input[autocomplete='current-password']"))
             )
             password_field.send_keys(password)
 
+            logger.debug(f"Clicking Login button")
             login_buttons = WebDriverWait(driver, self.selenium_timeout).until(
                 EC.presence_of_all_elements_located((By.CSS_SELECTOR, "button[data-testid='LoginForm_Login_Button']"))
             )
             login_buttons[0].click()
 
+            logger.debug(f"Waiting for Home tab to confirm login success")
             WebDriverWait(driver, self.selenium_timeout).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, "[data-testid='AppTabBar_Home_Link']"))
             )
 
+            logger.debug(f"Login success, extracting cookies")
             all_cookies = driver.get_cookies()
             cookie_dict = {cookie['name']: cookie['value'] for cookie in all_cookies}
+
+            logger.debug(f"Extracted cookies: {cookie_dict}")
             auth_token = cookie_dict.get("auth_token")
             ct0 = cookie_dict.get("ct0")
 
             if not auth_token or not ct0:
+                logger.warning(f"auth_token or ct0 not found in cookies for {username}")
                 raise ValueError("auth_token or ct0 not found in cookies")
 
             cookies_str = f"auth_token={auth_token}; ct0={ct0}"
             return cookies_str
 
-
         except Exception as e:
+            logger.exception(f"Exception during login attempt {attempt} for {username}: {e}")
             if attempt < self.max_login_attempts:
                 retry_delay = self.login_retry_delay * attempt + random.uniform(0, 2)
                 logger.warning(
-                    f"Login attempt {attempt} failed for {username}. Retrying in {retry_delay:.1f} seconds...")
+                    f"Login attempt {attempt} failed for {username}. Retrying in {retry_delay:.1f} seconds..."
+                )
                 await asyncio.sleep(retry_delay)
                 return await self._get_cookies_via_selenium(username, password, attempt + 1)
             else:
