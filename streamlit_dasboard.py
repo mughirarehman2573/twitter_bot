@@ -13,45 +13,45 @@ from twitter_auth import TwitterAuth
 import subprocess
 
 st.set_page_config(page_title="Twitter Hashtag Monitor", layout="wide")
-
-ADMIN_KEY = os.environ.get("ADMIN_KEY", "default_admin_key")
-SESSION_KEY = "authenticated"
-SESSION_KEY_VALUE = hashlib.sha256(ADMIN_KEY.encode()).hexdigest()
-
-def check_password():
-    """Returns `True` if the user had the correct password."""
-    def password_entered():
-        """Checks whether a password entered by the user is correct."""
-        entered_key = st.session_state["password"]
-        hashed_entered_key = hashlib.sha256(entered_key.encode()).hexdigest()
-        if hashed_entered_key == SESSION_KEY_VALUE:
-            st.session_state[SESSION_KEY] = True
-            st.session_state["password"] = ""
-        else:
-            st.session_state[SESSION_KEY] = False
-            st.error("Invalid access key")
-
-    if SESSION_KEY not in st.session_state:
-        st.text_input(
-            "Enter Admin Access Key",
-            type="password",
-            on_change=password_entered,
-            key="password"
-        )
-        st.stop()
-    elif not st.session_state[SESSION_KEY]:
-        st.text_input(
-            "Enter Admin Access Key",
-            type="password",
-            on_change=password_entered,
-            key="password"
-        )
-        st.error("Invalid access key")
-        st.stop()
-    return True
-
-if not check_password():
-    st.stop()
+#
+# ADMIN_KEY = os.environ.get("ADMIN_KEY", "default_admin_key")
+# SESSION_KEY = "authenticated"
+# SESSION_KEY_VALUE = hashlib.sha256(ADMIN_KEY.encode()).hexdigest()
+#
+# def check_password():
+#     """Returns `True` if the user had the correct password."""
+#     def password_entered():
+#         """Checks whether a password entered by the user is correct."""
+#         entered_key = st.session_state["password"]
+#         hashed_entered_key = hashlib.sha256(entered_key.encode()).hexdigest()
+#         if hashed_entered_key == SESSION_KEY_VALUE:
+#             st.session_state[SESSION_KEY] = True
+#             st.session_state["password"] = ""
+#         else:
+#             st.session_state[SESSION_KEY] = False
+#             st.error("Invalid access key")
+#
+#     if SESSION_KEY not in st.session_state:
+#         st.text_input(
+#             "Enter Admin Access Key",
+#             type="password",
+#             on_change=password_entered,
+#             key="password"
+#         )
+#         st.stop()
+#     elif not st.session_state[SESSION_KEY]:
+#         st.text_input(
+#             "Enter Admin Access Key",
+#             type="password",
+#             on_change=password_entered,
+#             key="password"
+#         )
+#         st.error("Invalid access key")
+#         st.stop()
+#     return True
+#
+# if not check_password():
+#     st.stop()
 
 @st.cache_resource
 def get_db():
@@ -99,6 +99,7 @@ if selected_page == "Account Management":
                             "proxy": None
                         })
                         st.success("Account added successfully!")
+                        st.rerun()  # Refresh the page to show the new account
                     except Exception as e:
                         st.error(f"Error adding account: {str(e)}")
                 else:
@@ -127,17 +128,49 @@ if selected_page == "Account Management":
                     if 'proxy' in account and account['proxy']:
                         st.write(f"**Proxy:** {account['proxy']}")
                 with col2:
-                    if st.button("Disable", key=f"disable_{account['username']}"):
-                        auth = TwitterAuth()
-                        asyncio.run(auth.disable_account(account['username']))
+                    btn_col1, btn_col2 = st.columns(2)
+                    with btn_col1:
+                        if st.button("Disable", key=f"disable_{account['username']}"):
+                            auth = TwitterAuth()
+                            asyncio.run(auth.disable_account(account['username']))
+                            st.rerun()
+                    with btn_col2:
+                        if st.button("Delete", key=f"delete_{account['username']}"):
+                            db.twitter_accounts.delete_one({"username": account['username']})
+                            st.success(f"Account @{account['username']} deleted permanently!")
+                            st.rerun()
 
         if st.checkbox("Show inactive accounts"):
             inactive_accounts = list(db.twitter_accounts.find({"is_active": False}))
             if inactive_accounts:
                 st.subheader("Inactive Accounts")
                 for account in inactive_accounts:
-                    st.write(f"@{account['username']} (last active: {account.get('last_used', 'never')})")
-
+                    with st.expander(f"@{account['username']}"):
+                        col1, col2 = st.columns([3, 1])
+                        with col1:
+                            st.write(f"**Added:** {account['added_at'].strftime('%Y-%m-%d %H:%M')}")
+                            if 'last_used' in account and account['last_used']:
+                                st.write(f"**Last used:** {account['last_used'].strftime('%Y-%m-%d %H:%M')}")
+                            else:
+                                st.write("**Last used:** Never")
+                            if 'email' in account and account['email']:
+                                st.write(f"**Email:** {account['email']}")
+                            if 'proxy' in account and account['proxy']:
+                                st.write(f"**Proxy:** {account['proxy']}")
+                        with col2:
+                            btn_col1, btn_col2 = st.columns(2)
+                            with btn_col1:
+                                if st.button("Enable", key=f"enable_{account['username']}"):
+                                    db.twitter_accounts.update_one(
+                                        {"username": account['username']},
+                                        {"$set": {"is_active": True}}
+                                    )
+                                    st.rerun()
+                            with btn_col2:
+                                if st.button("Delete", key=f"delete_inactive_{account['username']}"):
+                                    db.twitter_accounts.delete_one({"username": account['username']})
+                                    st.success(f"Account @{account['username']} deleted permanently!")
+                                    st.rerun()
 
 
 elif selected_page == "Campaign Management":
