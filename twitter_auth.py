@@ -22,6 +22,14 @@ class TwitterAuth:
         self.max_login_attempts = 3
         self.login_retry_delay = 5
         self.failed_accounts = set()
+        self.proxies = self.load_proxies()
+
+    def load_proxies(self, proxy_file="proxies.txt"):
+        try:
+            with open(proxy_file) as f:
+                return [line.strip() for line in f if line.strip()]
+        except FileNotFoundError:
+            return []
 
     def _setup_selenium(self, headless=True):
         options = uc.ChromeOptions()
@@ -105,12 +113,14 @@ class TwitterAuth:
             if driver:
                 driver.quit()
 
-    async def add_account(self, username: str, password: str, email: str | None, email_password: str | None, proxy: str = None):
+    async def add_account(self, username: str, password: str, email: str | None, email_password: str | None, proxy: str = None, mfa_code : str = None):
         try:
+            if proxy is None and self.proxies:
+                proxy = random.choice(self.proxies)
             # cookies = await self._get_cookies_via_selenium(username, password,email)
-            cookies = "auth_token=0c2950d4a3943995714c8cdc040124a6d00aa31f; ct0=b508b05c9d911e13b20cb4975e0f9f23e452381879cf877e958e69ad311044b410c80aa7bf475d19f4dfa6ce37597376f0a99b939bea9b80651d95f1857aeb1754fab4d0a14575e36843bf9ad7d437c1"
             # await self.pool.delete_accounts(username)
-            await self.pool.add_account(username, password, email, email_password,proxy, cookies=cookies)
+            cookies = "auth_token=0c2950d4a3943995714c8cdc040124a6d00aa31f; ct0=b508b05c9d911e13b20cb4975e0f9f23e452381879cf877e958e69ad311044b410c80aa7bf475d19f4dfa6ce37597376f0a99b939bea9b80651d95f1857aeb1754fab4d0a14575e36843bf9ad7d437c1"
+            await self.pool.add_account(username=username, password=password, email=email, email_password=email_password, proxy=f"http://{proxy}", mfa_code=mfa_code, cookies=cookies)
 
             account_data = {
                 "username": username,
@@ -164,7 +174,7 @@ class TwitterAuth:
                 email = acc.get("email")
                 email_password = acc.get("email_password")
 
-                cookies = await self._get_cookies_via_selenium(username, password,email)
+                cookies = await self._get_cookies_via_selenium(username, password, email)
                 await self.pool.add_account(username, password, email, email_password, cookies=cookies)
 
                 logger.info(f"Initialized account in pool: {username}")
@@ -172,13 +182,31 @@ class TwitterAuth:
                 logger.error(f"Failed to initialize account {acc.get('username')}: {str(e)}")
 
     async def add_accounts_from_file(self, filename="accounts.txt"):
-        """Load accounts from file and add them"""
+        with open("proxies.txt") as pf:
+            proxies = [line.strip() for line in pf if line.strip()]
         with open(filename) as f:
-            for line in f:
-                if line.strip():
-                    parts = line.strip().split(":")
-                    if len(parts) >= 4:
-                        await self.add_account(*parts[:4])
+            lines = [line.strip() for line in f if line.strip()]
+
+        random.shuffle(lines)
+
+        for i, line in enumerate(lines):
+            parts = line.split(":")
+            if len(parts) >= 5:
+                username = parts[0]
+                password = parts[1]
+                email = parts[2]
+                email_password = parts[3]
+                mfa_code = parts[4]
+                proxy = proxies[i % len(proxies)] if proxies else None
+
+                await self.add_account(
+                    username=username,
+                    password=password,
+                    email=email,
+                    email_password=email_password,
+                    proxy=proxy,
+                    mfa_code=mfa_code
+                )
 
     async def get_api(self, exclude_accounts=None, preferred_accounts=None):
         active_accounts = await self.get_active_accounts()

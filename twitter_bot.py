@@ -70,10 +70,11 @@ class TwitterHashtagMonitor:
                     logger.info(f"Found {len(tweets)} tweets for {pair}")
                     break
                 except Exception as e:
-                    if "No account available for queue" in str(e):
-                        logger.warning("Rate limit hit or no account available. Retrying with another account...")
-                        self.used_accounts.add(self.api.username)
-                        self.failed_accounts.add(self.api.username)
+                    if "429" in str(e) or "Too Many Requests" in str(e) or "No account available for queue" in str(e):
+                        logger.warning(f"Rate limit or account issue: {str(e)}. Retrying with another account...")
+                        if self.api and hasattr(self.api, "username"):
+                            self.used_accounts.add(self.api.username)
+                            self.failed_accounts.add(self.api.username)
                         await asyncio.sleep(5)
                         self.api = await self.auth.get_api(exclude_accounts=self.used_accounts)
                         continue
