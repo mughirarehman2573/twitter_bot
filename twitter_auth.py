@@ -105,11 +105,12 @@ class TwitterAuth:
             if driver:
                 driver.quit()
 
-    async def add_account(self, username: str, password: str, email: str | None, email_password: str | None):
+    async def add_account(self, username: str, password: str, email: str | None, email_password: str | None, proxy: str = None):
         try:
-            cookies = await self._get_cookies_via_selenium(username, password,email)
-            await self.pool.delete_accounts(username)
-            await self.pool.add_account(username, password, email, email_password, cookies=cookies)
+            # cookies = await self._get_cookies_via_selenium(username, password,email)
+            cookies = "auth_token=0c2950d4a3943995714c8cdc040124a6d00aa31f; ct0=b508b05c9d911e13b20cb4975e0f9f23e452381879cf877e958e69ad311044b410c80aa7bf475d19f4dfa6ce37597376f0a99b939bea9b80651d95f1857aeb1754fab4d0a14575e36843bf9ad7d437c1"
+            # await self.pool.delete_accounts(username)
+            await self.pool.add_account(username, password, email, email_password,proxy, cookies=cookies)
 
             account_data = {
                 "username": username,
@@ -169,6 +170,15 @@ class TwitterAuth:
                 logger.info(f"Initialized account in pool: {username}")
             except Exception as e:
                 logger.error(f"Failed to initialize account {acc.get('username')}: {str(e)}")
+
+    async def add_accounts_from_file(self, filename="accounts.txt"):
+        """Load accounts from file and add them"""
+        with open(filename) as f:
+            for line in f:
+                if line.strip():
+                    parts = line.strip().split(":")
+                    if len(parts) >= 4:
+                        await self.add_account(*parts[:4])
 
     async def get_api(self, exclude_accounts=None, preferred_accounts=None):
         active_accounts = await self.get_active_accounts()

@@ -13,52 +13,84 @@ from twitter_auth import TwitterAuth
 import subprocess
 
 st.set_page_config(page_title="Twitter Hashtag Monitor", layout="wide")
-#
-# ADMIN_KEY = os.environ.get("ADMIN_KEY", "default_admin_key")
-# SESSION_KEY = "authenticated"
-# SESSION_KEY_VALUE = hashlib.sha256(ADMIN_KEY.encode()).hexdigest()
-#
-# def check_password():
-#     """Returns `True` if the user had the correct password."""
-#     def password_entered():
-#         """Checks whether a password entered by the user is correct."""
-#         entered_key = st.session_state["password"]
-#         hashed_entered_key = hashlib.sha256(entered_key.encode()).hexdigest()
-#         if hashed_entered_key == SESSION_KEY_VALUE:
-#             st.session_state[SESSION_KEY] = True
-#             st.session_state["password"] = ""
-#         else:
-#             st.session_state[SESSION_KEY] = False
-#             st.error("Invalid access key")
-#
-#     if SESSION_KEY not in st.session_state:
-#         st.text_input(
-#             "Enter Admin Access Key",
-#             type="password",
-#             on_change=password_entered,
-#             key="password"
-#         )
-#         st.stop()
-#     elif not st.session_state[SESSION_KEY]:
-#         st.text_input(
-#             "Enter Admin Access Key",
-#             type="password",
-#             on_change=password_entered,
-#             key="password"
-#         )
-#         st.error("Invalid access key")
-#         st.stop()
-#     return True
-#
-# if not check_password():
-#     st.stop()
+
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
 
 @st.cache_resource
 def get_db():
     return MongoClient("mongodb://localhost:27017").twitter_monitor
 
-
 db = get_db()
+
+if "user" not in st.session_state:
+    st.session_state.user = None
+if "auth_mode" not in st.session_state:
+    st.session_state.auth_mode = "Login"
+
+def show_auth_toggle():
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        login_btn, signup_btn = st.columns(2)
+        with login_btn:
+            if st.button("Login", use_container_width=True):
+                st.session_state.auth_mode = "Login"
+        with signup_btn:
+            if st.button("Sign Up", use_container_width=True):
+                st.session_state.auth_mode = "Sign Up"
+
+def signup():
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.subheader("Sign Up")
+        username = st.text_input("Choose a username", key="signup_username")
+        password = st.text_input("Choose a password", type="password", key="signup_password")
+        confirm = st.text_input("Confirm password", type="password", key="signup_confirm")
+
+        if st.button("Sign Up"):
+            if not username or not password or not confirm:
+                st.error("All fields are required")
+            elif password != confirm:
+                st.error("Passwords do not match")
+            elif db.users.find_one({"username": username}):
+                st.error("Username already exists")
+            else:
+                db.users.insert_one({"username": username, "password": hash_password(password)})
+                st.success("Signup successful! Please log in.")
+                st.session_state.auth_mode = "Login"
+
+def login():
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.subheader("Login")
+        username = st.text_input("Username", key="login_username")
+        password = st.text_input("Password", type="password", key="login_password")
+
+        if st.button("Login"):
+            user = db.users.find_one({"username": username})
+            if user and user["password"] == hash_password(password):
+                st.session_state.user = username
+                st.success(f"Welcome, {username}!")
+                st.rerun()
+            else:
+                st.error("Invalid username or password")
+
+def logout():
+    st.sidebar.write(f"Logged in as: {st.session_state.user}")
+    if st.sidebar.button("Logout"):
+        st.session_state.user = None
+        st.success("Logged out successfully")
+        st.rerun()
+
+if not st.session_state.user:
+    show_auth_toggle()
+    if st.session_state.auth_mode == "Login":
+        login()
+    else:
+        signup()
+    st.stop()
+else:
+    logout()
 
 st.title("Twitter Hashtag Monitoring Dashboard")
 
@@ -81,13 +113,14 @@ if selected_page == "Account Management":
             username = st.text_input("Username")
             password = st.text_input("Password", type="password")
             email = st.text_input("Email")
+            proxy = st.text_input("Proxy")
             email_password = password
 
             if st.form_submit_button("Add Account"):
                 if username and password:
                     try:
                         auth = TwitterAuth()
-                        auth.add_account(username, password, email, email_password)
+                        auth.add_account(username, password, email, email_password ,proxy)
                         db.twitter_accounts.insert_one({
                             "username": username,
                             "password": password,
@@ -96,13 +129,28 @@ if selected_page == "Account Management":
                             "is_active": True,
                             "added_at": datetime.utcnow(),
                             "last_used": None,
-                            "proxy": None
+                            "proxy": proxy
                         })
                         st.success("Account added successfully!")
                         st.rerun()
                     except Exception as e:
                         st.error(f"Error adding account: {str(e)}")
                 else:
+                    st.error("All fields including proxy file are required")
+
+    with st.expander("Bulk Upload from File"):
+        uploaded_file = st.file_uploader("Upload accounts file (username:password:email:email_password)", type=["txt"])
+        if uploaded_file is not None:
+            if st.button("Process Uploaded File"):
+                try:
+                    with open("temp_accounts.txt", "wb") as f:
+                        f.write(uploaded_file.getvalue())
+
+                    auth = TwitterAuth()
+                    asyncio.run(auth.add_accounts_from_file("temp_accounts.txt"))
+                    st.success("Accounts uploaded successfully!")
+                except Exception as e:
+                    st.error(f"Error processing file: {str(e)}")
                     st.error("All fields including proxy file are required")
 
     st.subheader("Active Twitter Accounts")
