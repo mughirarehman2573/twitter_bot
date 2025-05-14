@@ -1,5 +1,4 @@
 import asyncio
-import random
 from datetime import datetime, timedelta
 import time
 from typing import List, Tuple
@@ -55,11 +54,7 @@ class TwitterHashtagMonitor:
             for attempt in range(retries):
                 try:
                     tweets = []
-                    with open("proxies.txt") as pf:
-                        proxies = [line.strip() for line in pf if line.strip()]
-                        random.shuffle(proxies)
-                    proxy = proxies[0] if proxies else None
-                    async for tweet in self.api.search(query, limit=100, proxy=proxy):
+                    async for tweet in self.api.search(query, limit=100):
                         tweets.append({
                             "username": tweet.user.username,
                             "hashtags": [hashtag.get("text", "") for hashtag in
@@ -89,7 +84,6 @@ class TwitterHashtagMonitor:
                         break
 
         return all_tweets
-
 
     async def store_tweets(self, campaign_id: str, tweets: List[dict]):
         inserted_count = 0
